@@ -107,3 +107,19 @@ Code adapted from:
 - [Task Arithmetic](https://github.com/mlfoundations/task_vectors)
 - [Consensus Merging](https://github.com/nik-dim/tall_masks)
 
+## Reproduction notes
+
+This fork records a checkpoint-based reproduction of the eight-task
+ViT-B-32 experiments from *Task Singular Vectors: Reducing Task
+Interference in Model Merging*.
+
+* Upstream repository: `AntoAndGar/task_singular_vectors`
+* Pinned upstream commit:
+  `a6c97188f7aa0bb20753de4f2939be89dd64f1c3`
+* Reproduction procedure and results:
+  [`docs/reproduction.md`](docs/reproduction.md)
+* Instructions for coding agents:
+  [`AGENTS.md`](AGENTS.md)
+
+This is an independent reproduction and research fork, not the official
+upstream repository.

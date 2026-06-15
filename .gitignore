@@ -3,3 +3,6 @@
 tsv_supmat.zip
 Task_Singular_Vectors_SupMat_Final.pdf
 media/*
+# Local datasets and checkpoints
+datasets/
+models/checkpoints/
