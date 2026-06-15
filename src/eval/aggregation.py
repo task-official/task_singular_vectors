@@ -25,6 +25,7 @@ from src.utils.TSVM_utils import (
     compute_and_sum_svd_mem_reduction,
     compute_and_sum_svd_mem_reduction_2,
     compute_and_sum_svd_mem_reduction_dummy,
+    compute_adaptive_tsv_merge,
 )
 from src.utils.TSVC_utils import compress_tv
 
@@ -154,7 +155,13 @@ def create_task_vector(
     remove_keys = []
 
     print(f"Flattening out Checkpoints")
-    if config.method.name not in ["TSVM", "TSVM_2", "TSVC", "dummy"]:
+    if config.method.name not in [
+        "TSVM",
+        "TSVM_2",
+        "AdaptiveTSV",
+        "TSVC",
+        "dummy",
+    ]:
         flat_ft = torch.vstack(
             [state_dict_to_vector(check, remove_keys) for check in ft_checks]
         )
@@ -177,7 +184,12 @@ def create_task_vector(
                 for i in range(len(ft_checks))
             ]
         )
-    elif config.method.name in ["TSVM", "TSVM_2", "dummy"]:
+    elif config.method.name in [
+        "TSVM",
+        "TSVM_2",
+        "AdaptiveTSV",
+        "dummy",
+    ]:
         # Create the task vectors
         task_vectors = [
             NonLinearTaskVector(config.model, ptm_check, check) for check in ft_checks
@@ -296,6 +308,10 @@ def create_task_vector(
         print(f"=== Using Eigendecomp ===")
 
         new_merged_tv = compute_and_sum_svd_mem_reduction_2(task_vectors, config)
+    elif config.method.name == "AdaptiveTSV":
+        print(f"=== Using Adaptive TSV Merge ===")
+
+        new_merged_tv = compute_adaptive_tsv_merge(task_vectors, config)
     elif config.method.name == "dummy":
         # SVD baseline
         print(f"=== Using Dummy ===")
@@ -310,7 +326,12 @@ def create_task_vector(
     else:
         raise ValueError(f"Method {config.method.name} not defined.")
 
-    if config.method.name in ["TSVM", "TSVM_2", "dummy"]:
+    if config.method.name in [
+        "TSVM",
+        "TSVM_2",
+        "AdaptiveTSV",
+        "dummy",
+    ]:
         task_vector = NonLinearTaskVector(model_name=config.model, vector=new_merged_tv)
     else:
         merged_tv_state_dict = vector_to_state_dict(

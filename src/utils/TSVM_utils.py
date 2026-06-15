@@ -472,6 +472,152 @@ def compute_and_sum_svd_mem_reduction_2(task_vectors, config):
     return new_vector
 
 
+def _adaptive_task_weights(config, device):
+    if len(config.method.task_weights) == 0:
+        weights = torch.ones(len(config.DATASETS), device=device)
+    else:
+        if len(config.method.task_weights) != len(config.DATASETS):
+            raise ValueError(
+                "method.task_weights must be empty or match the number of datasets."
+            )
+        weights = torch.tensor(config.method.task_weights, device=device)
+    if torch.any(weights < 0):
+        raise ValueError("method.task_weights must be non-negative.")
+    weight_sum = weights.sum()
+    if weight_sum <= 0:
+        raise ValueError("method.task_weights must contain at least one positive value.")
+    return weights / weight_sum
+
+
+def _adaptive_rank_from_energy(s, energy_threshold, eps):
+    energy = s.square()
+    total_energy = energy.sum()
+    if total_energy <= eps:
+        return 0
+    cumulative_energy = torch.cumsum(energy, dim=0) / total_energy
+    threshold = torch.tensor(energy_threshold, device=s.device)
+    return int(torch.searchsorted(cumulative_energy, threshold).item()) + 1
+
+
+def _adaptive_candidate_rank(s, config, energy_threshold, eps):
+    energy = s.square().sum()
+    if energy <= eps:
+        return 0
+
+    if config.method.rank_selection == "adaptive":
+        return _adaptive_rank_from_energy(s, energy_threshold, eps)
+    if config.method.rank_selection == "fixed":
+        return max(1, int(s.shape[0] / len(config.DATASETS)))
+
+    raise ValueError("method.rank_selection must be one of: adaptive, fixed.")
+
+
+def _adaptive_merge_coefficients(coefficients, weights, sign_merge, sign_threshold, eps):
+    weighted_coefficients = coefficients * weights.view(-1, 1, 1)
+    signed_sum = weighted_coefficients.sum(dim=0)
+
+    if sign_merge == "mean":
+        return signed_sum
+
+    absolute_sum = (coefficients.abs() * weights.view(-1, 1, 1)).sum(dim=0)
+    agreement = signed_sum.abs() / (absolute_sum + eps)
+
+    if sign_merge == "soft":
+        return signed_sum * agreement
+    if sign_merge == "hard":
+        return signed_sum * (agreement >= sign_threshold)
+    if sign_merge == "thresholded_soft":
+        return signed_sum * agreement * (agreement >= sign_threshold)
+
+    raise ValueError(
+        "method.sign_merge must be one of: mean, soft, hard, thresholded_soft."
+    )
+
+
+###############
+#### Adaptive TSV Merge
+def compute_adaptive_tsv_merge(task_vectors, config):
+    """
+    Merges task vectors with adaptive per-task TSV ranks and sign-agreement
+    filtering in a shared low-rank coordinate system.
+    """
+    device = config.device
+    energy_threshold = float(config.method.energy_threshold)
+    final_rank_fraction = float(config.method.final_rank_fraction)
+    sign_merge = config.method.sign_merge
+    sign_threshold = float(config.method.sign_threshold)
+    eps = float(config.method.eps)
+    weights = _adaptive_task_weights(config, device)
+    if energy_threshold <= 0 or energy_threshold > 1:
+        raise ValueError("method.energy_threshold must be in (0, 1].")
+    if final_rank_fraction <= 0:
+        raise ValueError("method.final_rank_fraction must be positive.")
+
+    print("Computing Adaptive TSV Merge...")
+    with torch.no_grad():
+        new_vector = {}
+        for key in task_vectors[0].vector:
+            first_vec = task_vectors[0].vector[key]
+            if len(first_vec.shape) != 2 or "text_projection" in key:
+                for i, task_vector in enumerate(task_vectors):
+                    vec = task_vector.vector[key].to(device)
+                    if i == 0:
+                        new_vector[key] = weights[i] * vec
+                    else:
+                        new_vector[key] += weights[i] * vec
+                continue
+
+            candidates = []
+            candidate_ranks = []
+            for task_vector in task_vectors:
+                vec = task_vector.vector[key].to(device)
+                u, s, v = torch.linalg.svd(vec, full_matrices=False)
+                rank = _adaptive_candidate_rank(s, config, energy_threshold, eps)
+                candidate_ranks.append(rank)
+                if rank == 0:
+                    candidates.append(torch.zeros_like(vec))
+                else:
+                    candidates.append(
+                        (u[:, :rank] * s[:rank].unsqueeze(0)) @ v[:rank, :]
+                    )
+
+            candidate_count = sum(candidate_ranks)
+            if candidate_count == 0:
+                new_vector[key] = torch.zeros_like(first_vec, device=device)
+                continue
+
+            layer_rank = min(first_vec.shape)
+            requested_rank = max(1, int(layer_rank * final_rank_fraction))
+            common_rank = min(layer_rank, candidate_count, requested_rank)
+            print(
+                f"Adaptive TSV for {key}: candidate ranks={candidate_ranks}, q={common_rank}"
+            )
+
+            weighted_candidates = [
+                torch.sqrt(weights[i]) * candidate
+                for i, candidate in enumerate(candidates)
+            ]
+            left_basis_source = torch.cat(weighted_candidates, dim=1)
+            right_basis_source = torch.cat(
+                [candidate.mT for candidate in weighted_candidates], dim=1
+            )
+
+            p, _, _ = torch.linalg.svd(left_basis_source, full_matrices=False)
+            q, _, _ = torch.linalg.svd(right_basis_source, full_matrices=False)
+            p = p[:, :common_rank]
+            q = q[:, :common_rank]
+
+            coefficients = torch.stack(
+                [p.mT @ candidate @ q for candidate in candidates], dim=0
+            )
+            merged_coefficients = _adaptive_merge_coefficients(
+                coefficients, weights, sign_merge, sign_threshold, eps
+            )
+            new_vector[key] = p @ merged_coefficients @ q.mT
+
+    return new_vector
+
+
 ###############
 #### Rank Reduction TV
 def compute_and_sum_svd_mem_reduction_rank_reduction(task_vectors, config):

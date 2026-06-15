@@ -1,0 +1,11 @@
+name: AdaptiveTSV
+k: 100
+energy_threshold: 0.95
+rank_selection: adaptive
+final_rank_fraction: 1.0
+sign_merge: soft
+sign_threshold: 0.5
+task_weights: []
+eps: 1e-12
+
+full_name: ${method.name}_${method.rank_selection}_rho=${method.energy_threshold}_q=${method.final_rank_fraction}_${method.sign_merge}_k=${method.k}
