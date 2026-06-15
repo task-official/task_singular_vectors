@@ -26,6 +26,7 @@ from src.utils.TSVM_utils import (
     compute_and_sum_svd_mem_reduction_2,
     compute_and_sum_svd_mem_reduction_dummy,
     compute_adaptive_tsv_merge,
+    compute_adaptive_tsv_subspace,
 )
 from src.utils.TSVC_utils import compress_tv
 
@@ -153,12 +154,15 @@ def create_task_vector(
         check_parameterNamesMatch(ft_checks + [ptm_check])
 
     remove_keys = []
+    diagnostics = None
 
     print(f"Flattening out Checkpoints")
     if config.method.name not in [
         "TSVM",
         "TSVM_2",
         "AdaptiveTSV",
+        "SubspaceTSV",
+        "AdaptiveSubspaceTSV",
         "TSVC",
         "dummy",
     ]:
@@ -188,6 +192,8 @@ def create_task_vector(
         "TSVM",
         "TSVM_2",
         "AdaptiveTSV",
+        "SubspaceTSV",
+        "AdaptiveSubspaceTSV",
         "dummy",
     ]:
         # Create the task vectors
@@ -303,15 +309,31 @@ def create_task_vector(
         print(f"=== Using SVD ===")
         # svd_dict = compute_svd_dict(task_vectors, config)
         # new_merged_tv = sum_svd_dict(svd_dict, config)
-        new_merged_tv = compute_and_sum_svd_mem_reduction(task_vectors, config)
+        new_merged_tv, diagnostics = compute_and_sum_svd_mem_reduction(
+            task_vectors, config, return_diagnostics=True
+        )
     elif config.method.name == "TSVM_2":
         print(f"=== Using Eigendecomp ===")
 
         new_merged_tv = compute_and_sum_svd_mem_reduction_2(task_vectors, config)
     elif config.method.name == "AdaptiveTSV":
-        print(f"=== Using Adaptive TSV Merge ===")
+        print(f"=== Using Adaptive TSV Rank ===")
 
-        new_merged_tv = compute_adaptive_tsv_merge(task_vectors, config)
+        new_merged_tv, diagnostics = compute_adaptive_tsv_merge(
+            task_vectors, config, return_diagnostics=True
+        )
+    elif config.method.name == "SubspaceTSV":
+        print(f"=== Using Subspace TSV ===")
+
+        new_merged_tv, diagnostics = compute_adaptive_tsv_subspace(
+            task_vectors, config, weighted=False, return_diagnostics=True
+        )
+    elif config.method.name == "AdaptiveSubspaceTSV":
+        print(f"=== Using Adaptive Subspace TSV ===")
+
+        new_merged_tv, diagnostics = compute_adaptive_tsv_subspace(
+            task_vectors, config, weighted=True, return_diagnostics=True
+        )
     elif config.method.name == "dummy":
         # SVD baseline
         print(f"=== Using Dummy ===")
@@ -330,6 +352,8 @@ def create_task_vector(
         "TSVM",
         "TSVM_2",
         "AdaptiveTSV",
+        "SubspaceTSV",
+        "AdaptiveSubspaceTSV",
         "dummy",
     ]:
         task_vector = NonLinearTaskVector(model_name=config.model, vector=new_merged_tv)
@@ -341,6 +365,8 @@ def create_task_vector(
         task_vector = NonLinearTaskVector(
             model_name=config.model, vector=merged_tv_state_dict
         )
+    if diagnostics is not None:
+        task_vector.diagnostics = diagnostics
     print("Norm of task vector: ", task_vector.norm())
 
     if config.method.name not in ["tall_mask", "mag_masking"]:

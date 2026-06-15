@@ -300,7 +300,7 @@ def compute_and_sum_svd_mem_reduction_lossless_eigen(task_vectors, config):
 
 ###############
 #### TSV Merge Orthogonalization
-def compute_and_sum_svd_mem_reduction(task_vectors, config):
+def compute_and_sum_svd_mem_reduction(task_vectors, config, return_diagnostics=False):
     """
     Computes the Singular Value Decomposition (SVD) for each vector in the task_vectors,
     reduces the dimensionality of the vectors based on the sv_reduction factor, and concatenate
@@ -319,11 +319,13 @@ def compute_and_sum_svd_mem_reduction(task_vectors, config):
     """
     sv_reduction = 1 / len(config.DATASETS)
     device = config.device
+    diagnostics = _init_merge_diagnostics(config, "TSVM") if return_diagnostics else None
     print("Computing SVD...")
     with torch.no_grad():
         new_vector = {}
         for key in task_vectors[0].vector:
             new_vector[key] = {}
+            original_vectors = []
             for i, (task_vector, dataset) in enumerate(
                 zip(task_vectors, config.DATASETS)
             ):
@@ -333,6 +335,8 @@ def compute_and_sum_svd_mem_reduction(task_vectors, config):
                     len(task_vector.vector[key].shape) == 2
                     and "text_projection" not in key
                 ):
+                    if return_diagnostics:
+                        original_vectors.append(vec)
                     u, s, v = torch.linalg.svd(vec, full_matrices=False)
 
                     if i == 0:
@@ -373,7 +377,35 @@ def compute_and_sum_svd_mem_reduction(task_vectors, config):
                         v_v,
                     )
                 )
+                if return_diagnostics:
+                    ranks = [reduced_index_s for _ in config.DATASETS]
+                    u_orth = u_u @ v_u
+                    v_orth = u_v @ v_v
+                    reconstructions = []
+                    for task_index, rank in enumerate(ranks):
+                        start = task_index * reduced_index_s
+                        end = start + rank
+                        reconstructions.append(
+                            torch.linalg.multi_dot(
+                                (
+                                    u_orth[:, start:end],
+                                    torch.diag(sum_s[start:end]),
+                                    v_orth[start:end, :],
+                                )
+                            )
+                        )
+                    _update_merge_diagnostics(
+                        diagnostics,
+                        key,
+                        original_vectors,
+                        reconstructions,
+                        ranks,
+                        base_rank=reduced_index_s,
+                        selection_ranks=ranks,
+                    )
 
+    if return_diagnostics:
+        return new_vector, _finalize_merge_diagnostics(diagnostics)
     return new_vector
 
 
@@ -472,23 +504,6 @@ def compute_and_sum_svd_mem_reduction_2(task_vectors, config):
     return new_vector
 
 
-def _adaptive_task_weights(config, device):
-    if len(config.method.task_weights) == 0:
-        weights = torch.ones(len(config.DATASETS), device=device)
-    else:
-        if len(config.method.task_weights) != len(config.DATASETS):
-            raise ValueError(
-                "method.task_weights must be empty or match the number of datasets."
-            )
-        weights = torch.tensor(config.method.task_weights, device=device)
-    if torch.any(weights < 0):
-        raise ValueError("method.task_weights must be non-negative.")
-    weight_sum = weights.sum()
-    if weight_sum <= 0:
-        raise ValueError("method.task_weights must contain at least one positive value.")
-    return weights / weight_sum
-
-
 def _adaptive_rank_from_energy(s, energy_threshold, eps):
     energy = s.square()
     total_energy = energy.sum()
@@ -499,122 +514,562 @@ def _adaptive_rank_from_energy(s, energy_threshold, eps):
     return int(torch.searchsorted(cumulative_energy, threshold).item()) + 1
 
 
-def _adaptive_candidate_rank(s, config, energy_threshold, eps):
-    energy = s.square().sum()
-    if energy <= eps:
-        return 0
-
-    if config.method.rank_selection == "adaptive":
-        return _adaptive_rank_from_energy(s, energy_threshold, eps)
-    if config.method.rank_selection == "fixed":
-        return max(1, int(s.shape[0] / len(config.DATASETS)))
-
-    raise ValueError("method.rank_selection must be one of: adaptive, fixed.")
+def _base_tsv_rank(s, config):
+    return int(s.shape[0] / len(config.DATASETS))
 
 
-def _adaptive_merge_coefficients(coefficients, weights, sign_merge, sign_threshold, eps):
-    weighted_coefficients = coefficients * weights.view(-1, 1, 1)
-    signed_sum = weighted_coefficients.sum(dim=0)
+def _normalized_svd_energy(s, eps):
+    total_energy = s.square().sum()
+    if total_energy <= eps:
+        return None
+    return s.square() / total_energy
 
-    if sign_merge == "mean":
-        return signed_sum
 
-    absolute_sum = (coefficients.abs() * weights.view(-1, 1, 1)).sum(dim=0)
-    agreement = signed_sum.abs() / (absolute_sum + eps)
+def _adaptive_rank_budget(singular_values, config, energy_threshold, eps):
+    ranks = [
+        _adaptive_rank_from_energy(s, energy_threshold, eps) for s in singular_values
+    ]
+    base_rank = _base_tsv_rank(singular_values[0], config)
+    budget = base_rank * len(config.DATASETS)
+    if budget == 0:
+        return [0 for _ in ranks]
 
-    if sign_merge == "soft":
-        return signed_sum * agreement
-    if sign_merge == "hard":
-        return signed_sum * (agreement >= sign_threshold)
-    if sign_merge == "thresholded_soft":
-        return signed_sum * agreement * (agreement >= sign_threshold)
+    nonzero_tasks = [
+        i for i, s in enumerate(singular_values) if s.square().sum() > eps
+    ]
+    min_rank = 1 if len(nonzero_tasks) <= budget else 0
+    ranks = [
+        max(min_rank, rank) if i in nonzero_tasks else 0
+        for i, rank in enumerate(ranks)
+    ]
+    normalized_energies = [_normalized_svd_energy(s, eps) for s in singular_values]
 
-    raise ValueError(
-        "method.sign_merge must be one of: mean, soft, hard, thresholded_soft."
+    while sum(ranks) > budget:
+        candidates = [
+            (float(normalized_energies[i][ranks[i] - 1]), i)
+            for i in nonzero_tasks
+            if ranks[i] > min_rank
+        ]
+        if not candidates:
+            break
+        _, task_index = min(candidates, key=lambda item: item[0])
+        ranks[task_index] -= 1
+
+    while sum(ranks) < budget:
+        candidates = [
+            (float(normalized_energies[i][ranks[i]]), i)
+            for i in nonzero_tasks
+            if (
+                normalized_energies[i] is not None
+                and ranks[i] < singular_values[i].shape[0]
+            )
+        ]
+        if not candidates:
+            break
+        _, task_index = max(candidates, key=lambda item: item[0])
+        ranks[task_index] += 1
+
+    return ranks
+
+
+def _orthogonalized_tsv_merge(
+    u_list, s_list, v_list, ranks, device, return_reconstructions=False
+):
+    total_rank = sum(ranks)
+    if total_rank == 0:
+        if return_reconstructions:
+            zero_reconstructions = [
+                torch.zeros(
+                    u_list[0].shape[0],
+                    v_list[0].shape[1],
+                    device=device,
+                    dtype=u_list[0].dtype,
+                )
+                for _ in ranks
+            ]
+            return None, zero_reconstructions
+        return None
+
+    sum_u = torch.zeros(
+        u_list[0].shape[0],
+        total_rank,
+        device=device,
+        dtype=u_list[0].dtype,
     )
+    sum_s = torch.zeros(total_rank, device=device, dtype=s_list[0].dtype)
+    sum_v = torch.zeros(
+        total_rank,
+        v_list[0].shape[1],
+        device=device,
+        dtype=v_list[0].dtype,
+    )
+
+    offset = 0
+    for u, s, v, rank in zip(u_list, s_list, v_list, ranks):
+        if rank == 0:
+            continue
+        next_offset = offset + rank
+        sum_u[:, offset:next_offset] = u[:, :rank]
+        sum_s[offset:next_offset] = s[:rank]
+        sum_v[offset:next_offset, :] = v[:rank, :]
+        offset = next_offset
+
+    u_u, _, v_u = torch.linalg.svd(sum_u, full_matrices=False)
+    u_v, _, v_v = torch.linalg.svd(sum_v, full_matrices=False)
+    merged = torch.linalg.multi_dot((u_u, v_u, torch.diag(sum_s), u_v, v_v))
+    if not return_reconstructions:
+        return merged
+
+    u_orth = u_u @ v_u
+    v_orth = u_v @ v_v
+    reconstructions = []
+    offset = 0
+    for rank in ranks:
+        next_offset = offset + rank
+        if rank == 0:
+            reconstructions.append(
+                torch.zeros(
+                    u_list[0].shape[0],
+                    v_list[0].shape[1],
+                    device=device,
+                    dtype=u_list[0].dtype,
+                )
+            )
+        else:
+            reconstructions.append(
+                torch.linalg.multi_dot(
+                    (
+                        u_orth[:, offset:next_offset],
+                        torch.diag(sum_s[offset:next_offset]),
+                        v_orth[offset:next_offset, :],
+                    )
+                )
+            )
+        offset = next_offset
+    return merged, reconstructions
+
+
+def _top_eigenvectors(matrix, rank):
+    _, eigenvectors = torch.linalg.eigh(matrix)
+    return eigenvectors[:, -rank:]
+
+
+def _mean_adaptive_rank(ranks, max_rank):
+    nonzero_ranks = [rank for rank in ranks if rank > 0]
+    if len(nonzero_ranks) == 0:
+        return 0
+    return min(max_rank, math.ceil(sum(nonzero_ranks) / len(nonzero_ranks)))
+
+
+def _adaptive_subspace_merge(
+    u_list, s_list, v_list, ranks, config, weighted, return_reconstructions=False
+):
+    device = config.device
+    eps = float(config.method.eps)
+    common_rank = _mean_adaptive_rank(
+        ranks, min(u_list[0].shape[0], v_list[0].shape[1])
+    )
+    if common_rank == 0:
+        if return_reconstructions:
+            zero_reconstructions = [
+                torch.zeros(
+                    u_list[0].shape[0],
+                    v_list[0].shape[1],
+                    device=device,
+                    dtype=u_list[0].dtype,
+                )
+                for _ in ranks
+            ]
+            return None, zero_reconstructions, common_rank
+        return None
+
+    g_u = torch.zeros(
+        u_list[0].shape[0],
+        u_list[0].shape[0],
+        device=device,
+        dtype=u_list[0].dtype,
+    )
+    g_v = torch.zeros(
+        v_list[0].shape[1],
+        v_list[0].shape[1],
+        device=device,
+        dtype=v_list[0].dtype,
+    )
+    task_weight = 1 / len(config.DATASETS)
+
+    for u, s, v, rank in zip(u_list, s_list, v_list, ranks):
+        if rank == 0:
+            continue
+        u_rank = u[:, :rank]
+        v_rank = v[:rank, :].mT
+        if weighted:
+            energy = s[:rank].square()
+            total_energy = energy.sum()
+            if total_energy <= eps:
+                continue
+            g_u += task_weight * (
+                (u_rank * energy.unsqueeze(0)) @ u_rank.mT
+            ) / total_energy
+            g_v += task_weight * (
+                (v_rank * energy.unsqueeze(0)) @ v_rank.mT
+            ) / total_energy
+        else:
+            g_u += task_weight * (u_rank @ u_rank.mT) / rank
+            g_v += task_weight * (v_rank @ v_rank.mT) / rank
+
+    p = _top_eigenvectors(g_u, common_rank)
+    q = _top_eigenvectors(g_v, common_rank)
+    c_merge = torch.zeros(
+        common_rank,
+        common_rank,
+        device=device,
+        dtype=u_list[0].dtype,
+    )
+    for u, s, v, rank in zip(u_list, s_list, v_list, ranks):
+        if rank == 0:
+            continue
+        candidate = (u[:, :rank] * s[:rank].unsqueeze(0)) @ v[:rank, :]
+        c_merge += p.mT @ candidate @ q
+
+    merged = p @ c_merge @ q.mT
+    if not return_reconstructions:
+        return merged
+
+    reconstructions = []
+    for u, s, v, rank in zip(u_list, s_list, v_list, ranks):
+        if rank == 0:
+            reconstructions.append(
+                torch.zeros(
+                    u_list[0].shape[0],
+                    v_list[0].shape[1],
+                    device=device,
+                    dtype=u_list[0].dtype,
+                )
+            )
+            continue
+        candidate = (u[:, :rank] * s[:rank].unsqueeze(0)) @ v[:rank, :]
+        task_coefficients = p.mT @ candidate @ q
+        reconstructions.append(p @ task_coefficients @ q.mT)
+
+    return merged, reconstructions, common_rank
+
+
+def _average_non_matrix_parameter(task_vectors, key, device):
+    for i, task_vector in enumerate(task_vectors):
+        vec = task_vector.vector[key].to(device)
+        if i == 0:
+            new_value = vec.clone()
+        else:
+            new_value += (vec - new_value) / (i + 1)
+    return new_value
+
+
+def _init_merge_diagnostics(config, method_name):
+    return {
+        "method": method_name,
+        "datasets": list(config.DATASETS),
+        "reconstruction": {
+            "squared_error_by_task": [0.0 for _ in config.DATASETS],
+            "squared_norm_by_task": [0.0 for _ in config.DATASETS],
+        },
+        "sti": {
+            "per_layer": {},
+        },
+        "rank": {
+            "per_layer": {},
+            "total_per_layer": {},
+        },
+    }
+
+
+def _compute_layer_sti(reconstructions, eps):
+    left_vectors = []
+    right_vectors = []
+    singular_values = []
+    for reconstruction in reconstructions:
+        u, s, v = torch.linalg.svd(reconstruction, full_matrices=False)
+        rank = int((s > eps).sum().item())
+        if rank == 0:
+            continue
+        left_vectors.append(u[:, :rank])
+        right_vectors.append(v[:rank, :].mT)
+        singular_values.append(s[:rank])
+
+    if len(singular_values) == 0:
+        return 0.0
+
+    sum_u = torch.cat(left_vectors, dim=1)
+    sum_v = torch.cat(right_vectors, dim=1)
+    sum_s = torch.cat(singular_values)
+    identity = torch.eye(sum_s.shape[0], device=sum_s.device, dtype=sum_s.dtype)
+    interference = (
+        (sum_u.mT @ sum_u - identity)
+        @ torch.diag(sum_s)
+        @ (sum_v.mT @ sum_v - identity)
+    )
+    return float(torch.sum(torch.abs(interference)).item())
+
+
+def _selection_energy_values(original_vectors, selection_ranks, eps):
+    values = []
+    for original_vector, rank in zip(original_vectors, selection_ranks):
+        _, s, _ = torch.linalg.svd(original_vector, full_matrices=False)
+        total_energy = s.square().sum()
+        if total_energy <= eps:
+            values.append((0.0, 0.0))
+        else:
+            values.append(
+                (
+                    float(s[:rank].square().sum().item()),
+                    float(total_energy.item()),
+                )
+            )
+    return values
+
+
+def _update_merge_diagnostics(
+    diagnostics,
+    key,
+    original_vectors,
+    reconstructions,
+    ranks,
+    base_rank=None,
+    selection_ranks=None,
+    subspace_rank=None,
+    max_rank=None,
+):
+    eps = 1e-12
+    for task_index, (original_vector, reconstruction) in enumerate(
+        zip(original_vectors, reconstructions)
+    ):
+        squared_error = (original_vector - reconstruction).square().sum()
+        squared_norm = original_vector.square().sum()
+        diagnostics["reconstruction"]["squared_error_by_task"][task_index] += float(
+            squared_error.item()
+        )
+        diagnostics["reconstruction"]["squared_norm_by_task"][task_index] += float(
+            squared_norm.item()
+        )
+
+    diagnostics["sti"]["per_layer"][key] = _compute_layer_sti(reconstructions, eps)
+    diagnostics["rank"]["per_layer"][key] = {
+        "r": int(max_rank if max_rank is not None else min(original_vectors[0].shape)),
+        "ranks": {
+            dataset: int(rank) for dataset, rank in zip(diagnostics["datasets"], ranks)
+        },
+        "total_rank": int(sum(ranks)),
+    }
+    diagnostics["rank"]["total_per_layer"][key] = int(sum(ranks))
+    if base_rank is not None:
+        diagnostics["rank"]["per_layer"][key]["base_rank"] = int(base_rank)
+
+    if selection_ranks is not None:
+        values = _selection_energy_values(original_vectors, selection_ranks, eps)
+        selection = diagnostics.setdefault(
+            "selection_energy",
+            {
+                "selected_energy_by_task": [0.0 for _ in diagnostics["datasets"]],
+                "total_energy_by_task": [0.0 for _ in diagnostics["datasets"]],
+            },
+        )
+        for task_index, (selected_energy, total_energy) in enumerate(values):
+            selection["selected_energy_by_task"][task_index] += selected_energy
+            selection["total_energy_by_task"][task_index] += total_energy
+
+    if subspace_rank is not None:
+        subspace = diagnostics.setdefault("subspace", {"per_layer": {}})
+        r = int(max_rank if max_rank is not None else min(original_vectors[0].shape))
+        subspace["per_layer"][key] = {
+            "q": int(subspace_rank),
+            "r": r,
+            "q_over_r": float(subspace_rank / r) if r > 0 else 0.0,
+        }
+
+
+def _finalize_merge_diagnostics(diagnostics):
+    datasets = diagnostics["datasets"]
+    squared_errors = diagnostics["reconstruction"].pop("squared_error_by_task")
+    squared_norms = diagnostics["reconstruction"].pop("squared_norm_by_task")
+    task_scores = {}
+    for dataset, squared_error, squared_norm in zip(
+        datasets, squared_errors, squared_norms
+    ):
+        if squared_norm == 0:
+            score = 0.0
+        else:
+            score = 1.0 - squared_error / squared_norm
+        task_scores[dataset] = score
+    diagnostics["reconstruction"]["task_scores"] = task_scores
+    scores = list(task_scores.values())
+    diagnostics["reconstruction"]["avg_score"] = sum(scores) / len(scores)
+    diagnostics["reconstruction"]["min_score"] = min(scores)
+
+    diagnostics["sti"]["total"] = sum(diagnostics["sti"]["per_layer"].values())
+
+    if "selection_energy" in diagnostics:
+        selected_energy = diagnostics["selection_energy"].pop(
+            "selected_energy_by_task"
+        )
+        total_energy = diagnostics["selection_energy"].pop("total_energy_by_task")
+        task_scores = {}
+        for dataset, selected, total in zip(datasets, selected_energy, total_energy):
+            task_scores[dataset] = selected / total if total > 0 else 0.0
+        diagnostics["selection_energy"]["task_scores"] = task_scores
+        scores = list(task_scores.values())
+        diagnostics["selection_energy"]["avg_score"] = sum(scores) / len(scores)
+        diagnostics["selection_energy"]["min_score"] = min(scores)
+
+    return diagnostics
 
 
 ###############
-#### Adaptive TSV Merge
-def compute_adaptive_tsv_merge(task_vectors, config):
+#### Adaptive TSV Merge Rank
+def compute_adaptive_tsv_merge(task_vectors, config, return_diagnostics=False):
     """
-    Merges task vectors with adaptive per-task TSV ranks and sign-agreement
-    filtering in a shared low-rank coordinate system.
+    Reallocates TSV-M's per-layer rank budget across tasks using normalized
+    singular-value energy, then uses the same Procrustes reconstruction as TSV-M.
     """
     device = config.device
     energy_threshold = float(config.method.energy_threshold)
-    final_rank_fraction = float(config.method.final_rank_fraction)
-    sign_merge = config.method.sign_merge
-    sign_threshold = float(config.method.sign_threshold)
     eps = float(config.method.eps)
-    weights = _adaptive_task_weights(config, device)
     if energy_threshold <= 0 or energy_threshold > 1:
         raise ValueError("method.energy_threshold must be in (0, 1].")
-    if final_rank_fraction <= 0:
-        raise ValueError("method.final_rank_fraction must be positive.")
 
-    print("Computing Adaptive TSV Merge...")
+    diagnostics = (
+        _init_merge_diagnostics(config, "AdaptiveTSV") if return_diagnostics else None
+    )
+    print("Computing Adaptive TSV Rank...")
     with torch.no_grad():
         new_vector = {}
         for key in task_vectors[0].vector:
             first_vec = task_vectors[0].vector[key]
             if len(first_vec.shape) != 2 or "text_projection" in key:
-                for i, task_vector in enumerate(task_vectors):
-                    vec = task_vector.vector[key].to(device)
-                    if i == 0:
-                        new_vector[key] = weights[i] * vec
-                    else:
-                        new_vector[key] += weights[i] * vec
+                new_vector[key] = _average_non_matrix_parameter(
+                    task_vectors, key, device
+                )
                 continue
 
-            candidates = []
-            candidate_ranks = []
+            u_list, s_list, v_list = [], [], []
+            original_vectors = []
             for task_vector in task_vectors:
                 vec = task_vector.vector[key].to(device)
+                if return_diagnostics:
+                    original_vectors.append(vec)
                 u, s, v = torch.linalg.svd(vec, full_matrices=False)
-                rank = _adaptive_candidate_rank(s, config, energy_threshold, eps)
-                candidate_ranks.append(rank)
-                if rank == 0:
-                    candidates.append(torch.zeros_like(vec))
-                else:
-                    candidates.append(
-                        (u[:, :rank] * s[:rank].unsqueeze(0)) @ v[:rank, :]
-                    )
+                u_list.append(u)
+                s_list.append(s)
+                v_list.append(v)
 
-            candidate_count = sum(candidate_ranks)
-            if candidate_count == 0:
+            ranks = _adaptive_rank_budget(s_list, config, energy_threshold, eps)
+            if return_diagnostics:
+                merged, reconstructions = _orthogonalized_tsv_merge(
+                    u_list,
+                    s_list,
+                    v_list,
+                    ranks,
+                    device,
+                    return_reconstructions=True,
+                )
+            else:
+                merged = _orthogonalized_tsv_merge(u_list, s_list, v_list, ranks, device)
+            if merged is None:
                 new_vector[key] = torch.zeros_like(first_vec, device=device)
+            else:
+                print(f"Adaptive TSV Rank for {key}: ranks={ranks}")
+                new_vector[key] = merged
+            if return_diagnostics:
+                _update_merge_diagnostics(
+                    diagnostics,
+                    key,
+                    original_vectors,
+                    reconstructions,
+                    ranks,
+                    base_rank=_base_tsv_rank(s_list[0], config),
+                    selection_ranks=ranks,
+                )
+
+    if return_diagnostics:
+        return new_vector, _finalize_merge_diagnostics(diagnostics)
+    return new_vector
+
+
+###############
+#### Adaptive TSV Merge Subspace
+def compute_adaptive_tsv_subspace(
+    task_vectors, config, weighted=False, return_diagnostics=False
+):
+    """
+    Builds shared left/right subspaces from 95%-energy task subspaces and merges
+    task vectors in the shared coordinate system. When weighted=True, singular
+    value energy weights the projection sums.
+    """
+    device = config.device
+    energy_threshold = float(config.method.energy_threshold)
+    eps = float(config.method.eps)
+    if energy_threshold <= 0 or energy_threshold > 1:
+        raise ValueError("method.energy_threshold must be in (0, 1].")
+
+    method_label = "EnergySubspace" if weighted else "Subspace"
+    method_name = "AdaptiveSubspaceTSV" if weighted else "SubspaceTSV"
+    diagnostics = (
+        _init_merge_diagnostics(config, method_name) if return_diagnostics else None
+    )
+    print(f"Computing Adaptive TSV {method_label}...")
+    with torch.no_grad():
+        new_vector = {}
+        for key in task_vectors[0].vector:
+            first_vec = task_vectors[0].vector[key]
+            if len(first_vec.shape) != 2 or "text_projection" in key:
+                new_vector[key] = _average_non_matrix_parameter(
+                    task_vectors, key, device
+                )
                 continue
 
-            layer_rank = min(first_vec.shape)
-            requested_rank = max(1, int(layer_rank * final_rank_fraction))
-            common_rank = min(layer_rank, candidate_count, requested_rank)
-            print(
-                f"Adaptive TSV for {key}: candidate ranks={candidate_ranks}, q={common_rank}"
-            )
+            u_list, s_list, v_list, ranks = [], [], [], []
+            original_vectors = []
+            for task_vector in task_vectors:
+                vec = task_vector.vector[key].to(device)
+                if return_diagnostics:
+                    original_vectors.append(vec)
+                u, s, v = torch.linalg.svd(vec, full_matrices=False)
+                rank = _adaptive_rank_from_energy(s, energy_threshold, eps)
+                u_list.append(u)
+                s_list.append(s)
+                v_list.append(v)
+                ranks.append(rank)
 
-            weighted_candidates = [
-                torch.sqrt(weights[i]) * candidate
-                for i, candidate in enumerate(candidates)
-            ]
-            left_basis_source = torch.cat(weighted_candidates, dim=1)
-            right_basis_source = torch.cat(
-                [candidate.mT for candidate in weighted_candidates], dim=1
-            )
+            if return_diagnostics:
+                merged, reconstructions, common_rank = _adaptive_subspace_merge(
+                    u_list,
+                    s_list,
+                    v_list,
+                    ranks,
+                    config,
+                    weighted,
+                    return_reconstructions=True,
+                )
+            else:
+                merged = _adaptive_subspace_merge(
+                    u_list, s_list, v_list, ranks, config, weighted
+                )
+            if merged is None:
+                new_vector[key] = torch.zeros_like(first_vec, device=device)
+            else:
+                print(f"Adaptive TSV {method_label} for {key}: ranks={ranks}")
+                new_vector[key] = merged
+            if return_diagnostics:
+                _update_merge_diagnostics(
+                    diagnostics,
+                    key,
+                    original_vectors,
+                    reconstructions,
+                    ranks,
+                    subspace_rank=common_rank,
+                    max_rank=min(first_vec.shape),
+                )
 
-            p, _, _ = torch.linalg.svd(left_basis_source, full_matrices=False)
-            q, _, _ = torch.linalg.svd(right_basis_source, full_matrices=False)
-            p = p[:, :common_rank]
-            q = q[:, :common_rank]
-
-            coefficients = torch.stack(
-                [p.mT @ candidate @ q for candidate in candidates], dim=0
-            )
-            merged_coefficients = _adaptive_merge_coefficients(
-                coefficients, weights, sign_merge, sign_threshold, eps
-            )
-            new_vector[key] = p @ merged_coefficients @ q.mT
-
+    if return_diagnostics:
+        return new_vector, _finalize_merge_diagnostics(diagnostics)
     return new_vector
 
 

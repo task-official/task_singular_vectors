@@ -104,6 +104,9 @@ def perform_eval_with_merged_vector(args, task_vector, eval_masks=None, svd_dict
         "val": val_metrics,
         "val_best": best_val_metrics,
     }
+    diagnostics = getattr(task_vector, "diagnostics", None)
+    if diagnostics is not None:
+        final_results["diagnostics"] = diagnostics
 
     log_results(final_results, args)
 
