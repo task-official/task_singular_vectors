@@ -6,3 +6,14 @@ media/*
 # Local datasets and checkpoints
 datasets/
 models/checkpoints/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+
+# Local editor state
+.vscode/
+
+# Local execution logs
+logs/
+run_logs/
