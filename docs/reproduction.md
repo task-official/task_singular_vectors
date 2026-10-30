@@ -1,5 +1,12 @@
 # ViT-B-32 Eight-Task Reproduction
 
+> Current entrypoints: the commands below record the historical reproduction.
+> `main.py` now translates into the common runner, requires `prepare.py`, and writes
+> exclusive new-format run directories beneath the requested `results/<save_subfolder>`.
+> It does not overwrite the historical result filenames or reuse the old normalization JSON.
+> Historical metadata and single-task logs moved to `archive/repro_metadata/`,
+> `archive/reproduction_metadata/`, and `archive/run_logs/`. See [the current README](../README.md).
+
 This document records the local checkpoint-based reproduction of the
 eight-task ViT-B-32 experiments from:
 
