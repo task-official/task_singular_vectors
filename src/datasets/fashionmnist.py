@@ -10,12 +10,11 @@ class FashionMNIST:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
 
         location = os.path.join(location, "FashionMNIST")
         self.train_dataset = datasets.FashionMNIST(
-            root=location, download=True, train=True, transform=preprocess
+            root=location, download=download, train=True, transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -26,7 +25,7 @@ class FashionMNIST:
         )
 
         self.test_dataset = datasets.FashionMNIST(
-            root=location, download=True, train=False, transform=preprocess
+            root=location, download=download, train=False, transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

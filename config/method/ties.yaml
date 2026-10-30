@@ -1,4 +1,8 @@
-name: ties
-k: 100
-
-full_name: ${method.name}_k=${method.k}
+id: ties
+parameters:
+  alpha: 1.0
+  retention_fraction: 0.2
+search_candidates:
+  - {alpha: 0.5}
+  - {alpha: 1.0}
+  - {alpha: 1.5}

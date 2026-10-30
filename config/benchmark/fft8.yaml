@@ -1,0 +1,11 @@
+name: fft8
+task_ids:
+  - Cars
+  - DTD
+  - EuroSAT
+  - GTSRB
+  - MNIST
+  - RESISC45
+  - SVHN
+  - SUN397
+tasks: {}

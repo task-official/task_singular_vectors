@@ -1,0 +1,7 @@
+name: common_tuned
+selection:
+  mode: grid
+  candidates: ${method.search_candidates}
+  seed: 0
+  # Choose an explicit image budget for your own task set; no hidden default.
+  max_validation_images: ???

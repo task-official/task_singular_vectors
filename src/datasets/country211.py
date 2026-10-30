@@ -10,12 +10,11 @@ class Country211:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
 
         location = os.path.join(location, "Country211")
         self.train_dataset = datasets.Country211(
-            root=location, download=True, split="train", transform=preprocess
+            root=location, download=download, split="train", transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -26,7 +25,7 @@ class Country211:
         )
 
         self.test_dataset = datasets.Country211(
-            root=location, download=True, split="test", transform=preprocess
+            root=location, download=download, split="test", transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

@@ -9,12 +9,11 @@ class OxfordIIITPet:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
 
         location = os.path.join(location, "OxfordIIITPet")
         self.train_dataset = datasets.OxfordIIITPet(
-            root=location, download=True, split="trainval", transform=preprocess
+            root=location, download=download, split="trainval", transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -25,7 +24,7 @@ class OxfordIIITPet:
         )
 
         self.test_dataset = datasets.OxfordIIITPet(
-            root=location, download=True, split="test", transform=preprocess
+            root=location, download=download, split="test", transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

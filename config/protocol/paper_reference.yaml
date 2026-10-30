@@ -1,0 +1,8 @@
+# A container for an explicitly specified paper/code reference experiment.
+# This profile does NOT certify that your checkpoints/splits reproduce a paper.
+name: paper_reference
+selection:
+  mode: fixed
+  candidates: [{}]
+  seed: 0
+  max_validation_images: null
