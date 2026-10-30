@@ -1,0 +1,10 @@
+name: common_tuned
+selection:
+  mode: bayes
+  candidates: [{}]
+  seed: 0
+  max_validation_images: ???
+  energy_bounds: [0.1, 0.99]
+  initial_energies: [0.45, 0.65, 0.85]
+  max_trials: 12
+  ei_tolerance: 0.01

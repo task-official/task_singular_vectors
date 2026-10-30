@@ -1,0 +1,8 @@
+id: iso_cts
+parameters:
+  alpha: 1.0
+  common_space_fraction: 0.8
+search_candidates:
+  - {alpha: 0.5}
+  - {alpha: 1.0}
+  - {alpha: 1.5}

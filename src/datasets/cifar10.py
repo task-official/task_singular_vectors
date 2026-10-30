@@ -27,11 +27,10 @@ class CIFAR10:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
 
         self.train_dataset = PyTorchCIFAR10(
-            root=location, download=True, train=True, transform=preprocess
+            root=location, download=download, train=True, transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -42,7 +41,7 @@ class CIFAR10:
         )
 
         self.test_dataset = PyTorchCIFAR10(
-            root=location, download=True, train=False, transform=preprocess
+            root=location, download=download, train=False, transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

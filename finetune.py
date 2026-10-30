@@ -6,7 +6,7 @@ import torch
 import wandb
 
 from src.datasets import get_dataloader, get_dataset, maybe_dictionarize
-from src.eval.eval import eval_single_dataset
+from src.compat.training import eval_single_dataset
 from src.models import ImageClassifier, ImageEncoder, get_classification_head
 from src.utils import initialize_wandb, parse_arguments
 from src.utils.distributed import (

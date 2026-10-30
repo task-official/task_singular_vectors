@@ -1,0 +1,6 @@
+name: common_fixed
+selection:
+  mode: fixed
+  candidates: [{}]
+  seed: 0
+  max_validation_images: null

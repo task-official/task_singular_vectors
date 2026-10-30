@@ -1,4 +1,5 @@
 import os
+import time
 from typing import Dict, Optional, Tuple
 
 import torch
@@ -27,6 +28,7 @@ from src.utils.TSVM_utils import (
     compute_and_sum_svd_mem_reduction_dummy,
     compute_adaptive_tsv_merge,
     compute_adaptive_tsv_subspace,
+    compute_component_selection_tsv_merge,
 )
 from src.utils.TSVC_utils import compress_tv
 
@@ -163,6 +165,10 @@ def create_task_vector(
         "AdaptiveTSV",
         "SubspaceTSV",
         "AdaptiveSubspaceTSV",
+        "GlobalEnergyTopR",
+        "GlobalRawEnergyTopR",
+        "PerTask95FullConcat",
+        "FullComponentFullConcat",
         "TSVC",
         "dummy",
     ]:
@@ -194,6 +200,10 @@ def create_task_vector(
         "AdaptiveTSV",
         "SubspaceTSV",
         "AdaptiveSubspaceTSV",
+        "GlobalEnergyTopR",
+        "GlobalRawEnergyTopR",
+        "PerTask95FullConcat",
+        "FullComponentFullConcat",
         "dummy",
     ]:
         # Create the task vectors
@@ -232,6 +242,18 @@ def create_task_vector(
         )
 
     print(f"MODEL: {config.model}, METHOD {config.method.name}")
+
+    measure_merge = config.method.name in [
+        "GlobalEnergyTopR",
+        "GlobalRawEnergyTopR",
+        "PerTask95FullConcat",
+        "FullComponentFullConcat",
+    ]
+    measure_cuda = measure_merge and str(config.device).startswith("cuda")
+    if measure_cuda:
+        torch.cuda.synchronize(config.device)
+        torch.cuda.reset_peak_memory_stats(config.device)
+    merge_start = time.perf_counter() if measure_merge else None
 
     if config.method.name == "ties":
         # TIES Merging
@@ -334,6 +356,46 @@ def create_task_vector(
         new_merged_tv, diagnostics = compute_adaptive_tsv_subspace(
             task_vectors, config, weighted=True, return_diagnostics=True
         )
+    elif config.method.name == "GlobalEnergyTopR":
+        print("=== Using Global Normalized-Energy Top-r ===")
+
+        new_merged_tv, diagnostics = compute_component_selection_tsv_merge(
+            task_vectors,
+            config,
+            selection_mode="global_top_r",
+            method_name="GlobalEnergyTopR",
+            return_diagnostics=True,
+        )
+    elif config.method.name == "GlobalRawEnergyTopR":
+        print("=== Using Global Raw-Energy Top-r ===")
+
+        new_merged_tv, diagnostics = compute_component_selection_tsv_merge(
+            task_vectors,
+            config,
+            selection_mode="global_raw_top_r",
+            method_name="GlobalRawEnergyTopR",
+            return_diagnostics=True,
+        )
+    elif config.method.name == "PerTask95FullConcat":
+        print("=== Using Per-Task 95% Full Concatenation ===")
+
+        new_merged_tv, diagnostics = compute_component_selection_tsv_merge(
+            task_vectors,
+            config,
+            selection_mode="per_task_95",
+            method_name="PerTask95FullConcat",
+            return_diagnostics=True,
+        )
+    elif config.method.name == "FullComponentFullConcat":
+        print("=== Using Full-Component Full Concatenation ===")
+
+        new_merged_tv, diagnostics = compute_component_selection_tsv_merge(
+            task_vectors,
+            config,
+            selection_mode="full",
+            method_name="FullComponentFullConcat",
+            return_diagnostics=True,
+        )
     elif config.method.name == "dummy":
         # SVD baseline
         print(f"=== Using Dummy ===")
@@ -348,12 +410,31 @@ def create_task_vector(
     else:
         raise ValueError(f"Method {config.method.name} not defined.")
 
+    if measure_merge:
+        if measure_cuda:
+            torch.cuda.synchronize(config.device)
+        merge_seconds = time.perf_counter() - merge_start
+        if diagnostics is None:
+            diagnostics = {}
+        diagnostics["performance"] = {
+            "merge_seconds": merge_seconds,
+            "peak_gpu_memory_bytes": (
+                int(torch.cuda.max_memory_allocated(config.device))
+                if measure_cuda
+                else None
+            ),
+        }
+
     if config.method.name in [
         "TSVM",
         "TSVM_2",
         "AdaptiveTSV",
         "SubspaceTSV",
         "AdaptiveSubspaceTSV",
+        "GlobalEnergyTopR",
+        "GlobalRawEnergyTopR",
+        "PerTask95FullConcat",
+        "FullComponentFullConcat",
         "dummy",
     ]:
         task_vector = NonLinearTaskVector(model_name=config.model, vector=new_merged_tv)

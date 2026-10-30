@@ -10,13 +10,12 @@ class SVHN:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
         # to fit with repo conventions for location
         modified_location = os.path.join(location, "svhn")
 
         self.train_dataset = PyTorchSVHN(
-            root=modified_location, download=True, split="train", transform=preprocess
+            root=modified_location, download=download, split="train", transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -27,7 +26,7 @@ class SVHN:
         )
 
         self.test_dataset = PyTorchSVHN(
-            root=modified_location, download=True, split="test", transform=preprocess
+            root=modified_location, download=download, split="test", transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

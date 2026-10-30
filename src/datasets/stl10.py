@@ -9,12 +9,11 @@ class STL10:
         preprocess,
         location=os.path.expanduser("~/data"),
         batch_size=128,
-        num_workers=6,
-    ):
+        num_workers=6, download=True):
 
         location = os.path.join(location, "stl10")
         self.train_dataset = datasets.STL10(
-            root=location, download=True, split="train", transform=preprocess
+            root=location, download=download, split="train", transform=preprocess
         )
 
         self.train_loader = torch.utils.data.DataLoader(
@@ -25,7 +24,7 @@ class STL10:
         )
 
         self.test_dataset = datasets.STL10(
-            root=location, download=True, split="test", transform=preprocess
+            root=location, download=download, split="test", transform=preprocess
         )
 
         self.test_loader = torch.utils.data.DataLoader(

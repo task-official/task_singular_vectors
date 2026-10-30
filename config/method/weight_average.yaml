@@ -1,0 +1,4 @@
+id: weight_average
+parameters:
+  retention_fraction: 1.0
+search_candidates: [{}]

@@ -4,7 +4,7 @@ import random
 import sys
 
 import torch
-from torch.utils.data.dataset import random_split
+from src.datasets.splits import validation_partition
 
 from src.datasets.cars import Cars
 from src.datasets.cifar10 import CIFAR10
@@ -52,24 +52,7 @@ def split_train_into_train_val(
     max_val_samples=None,
     seed=0,
 ):
-    assert val_fraction > 0.0 and val_fraction < 1.0
-    total_size = len(dataset.train_dataset)
-    val_size = int(total_size * val_fraction)
-    if max_val_samples is not None:
-        val_size = min(val_size, max_val_samples)
-    train_size = total_size - val_size
-
-    assert val_size > 0
-    assert train_size > 0
-
-    lengths = [train_size, val_size]
-
-    trainset, valset = random_split(
-        dataset.train_dataset, lengths, generator=torch.Generator().manual_seed(seed)
-    )
-    if new_dataset_class_name == "MNISTVal":
-        assert trainset.indices[0] == 36044
-
+    trainset, valset = validation_partition(dataset.train_dataset, val_fraction, max_val_samples, seed)
     new_dataset = None
 
     new_dataset_class = type(new_dataset_class_name, (GenericDataset,), {})
@@ -101,6 +84,8 @@ def get_dataset(
     num_workers=6,
     val_fraction=0.1,
     max_val_samples=5000,
+    seed=0,
+    download=True,
 ):
     if dataset_name.endswith("Val"):
         # Handle val splits
@@ -109,7 +94,7 @@ def get_dataset(
         else:
             base_dataset_name = dataset_name.split("Val")[0]
             base_dataset = get_dataset(
-                base_dataset_name, preprocess, location, batch_size, num_workers
+                base_dataset_name, preprocess, location, batch_size, num_workers, download=download
             )
             dataset = split_train_into_train_val(
                 base_dataset,
@@ -118,6 +103,7 @@ def get_dataset(
                 num_workers,
                 val_fraction,
                 max_val_samples,
+                seed,
             )
             return dataset
     else:
@@ -126,7 +112,8 @@ def get_dataset(
         ), f"Unsupported dataset: {dataset_name}. Supported datasets: {list(registry.keys())}"
         dataset_class = registry[dataset_name]
 
-    dataset = dataset_class(
-        preprocess, location=location, batch_size=batch_size, num_workers=num_workers
-    )
+    options = dict(location=location, batch_size=batch_size, num_workers=num_workers)
+    if "download" in inspect.signature(dataset_class).parameters:
+        options["download"] = download
+    dataset = dataset_class(preprocess, **options)
     return dataset

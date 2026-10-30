@@ -1,0 +1,17 @@
+defaults:
+  - benchmark: fft8
+  - model: vit_b32
+  - inputs: author_fft
+  - method: tsvm
+  - protocol: common_fixed
+  - runtime: local
+  - _self_
+resume_from: null
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: logs/experiments/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+  sweep:
+    dir: logs/experiments/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S-%f}
+    subdir: ${hydra.job.num}

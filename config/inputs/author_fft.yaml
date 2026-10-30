@@ -1,0 +1,9 @@
+checkpoint_root: models/checkpoints
+data_root: datasets
+# These templates describe the existing author checkpoint layout explicitly.
+base: "{model}/MNISTVal/nonlinear_zeroshot.pt"
+finetuned: "{model}/{task}Val/nonlinear_finetuned.pt"
+head: "{model}/head_{task}Val.pt"
+data_profile: legacy_local
+# File identities are measured, but author split equivalence remains unverified.
+source_status: local_unverified

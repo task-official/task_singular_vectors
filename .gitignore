@@ -4,8 +4,11 @@ tsv_supmat.zip
 Task_Singular_Vectors_SupMat_Final.pdf
 media/*
 # Local datasets and checkpoints
-datasets/
-models/checkpoints/
+/datasets/
+/models/checkpoints/
+/models/tall_masks/
+/cache/
+/results/experiments/
 
 # Python generated files
 __pycache__/
@@ -17,3 +20,11 @@ __pycache__/
 # Local execution logs
 logs/
 run_logs/
+
+# Archived local research artifacts; source snapshots remain versionable.
+/archive/*
+!/archive/legacy_code/
+/results/reports/
+
+/.repro-doc-backup/
+/results/

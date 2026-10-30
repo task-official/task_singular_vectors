@@ -211,6 +211,10 @@ def evaluate_task_vector(
         "AdaptiveTSV",
         "SubspaceTSV",
         "AdaptiveSubspaceTSV",
+        "GlobalEnergyTopR",
+        "GlobalRawEnergyTopR",
+        "PerTask95FullConcat",
+        "FullComponentFullConcat",
     ]:
         scaling_coef_range = np.linspace(0.0, 3.0, args.n_eval_points)[1:]
     else:

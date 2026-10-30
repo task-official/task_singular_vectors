@@ -4,7 +4,7 @@ import argparse
 import torch
 
 
-def parse_arguments():
+def parse_arguments(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--data-dir",
@@ -120,8 +120,13 @@ def parse_arguments():
         help="Subfolder to save the results in",
     )
 
-    parsed_args = parser.parse_args()
-    parsed_args.device = "cuda" if torch.cuda.is_available() else "cpu"
+    parser.add_argument("--device", default=None, help="Explicit execution device")
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--direct-ft", action="store_true", help="Evaluate the exact FT checkpoint instead of historical base+(FT-base)")
+    parser.add_argument("--rank-fractions", type=lambda text: tuple(float(v) for v in text.split(",")), default=None)
+    parsed_args = parser.parse_args(argv)
+    parsed_args.device = parsed_args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     if parsed_args.load is not None and len(parsed_args.load) == 1:
         parsed_args.load = parsed_args.load[0]
