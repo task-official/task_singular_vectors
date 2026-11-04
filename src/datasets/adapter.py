@@ -19,6 +19,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset, TensorDataset
 
 from src.core.types import RuntimeSpec, TaskSpec
+from src.datasets.sun397_all_images import build_dataset as sun397_all_images
 
 DATASET_ADAPTER_VERSION = "offline-splits-v3-hf-observed-rows"
 
@@ -298,6 +299,7 @@ def _hf_disk(spec: Mapping[str, Any], root: Path, preprocess: Callable | None, r
 DATASET_ADAPTERS: dict[str, Callable] = {
     "legacy": _legacy, "imagefolder": _imagefolder,
     "tensor_file": _tensor_file, "hf_disk": _hf_disk,
+    "sun397_all_images": sun397_all_images,
 }
 
 

@@ -1,0 +1,7 @@
+defaults:
+  - fft8_tuned_alpha
+  - _self_
+
+# A single candidate still belongs to the same tuned comparison category.
+selection:
+  candidates: [{}]

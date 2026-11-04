@@ -1,0 +1,22 @@
+# Local common comparison; legacy fft8 and source images are unchanged.
+name: fft8_all_images
+task_ids:
+  - Cars
+  - DTD
+  - EuroSAT
+  - GTSRB
+  - MNIST
+  - RESISC45
+  - SVHN
+  - SUN397
+tasks:
+  SUN397:
+    validation:
+      adapter: sun397_all_images
+      path: sun397/train
+      val_fraction: 0.1
+      max_val_samples: 5000
+      seed: 0
+    test:
+      adapter: sun397_all_images
+      path: sun397/val
