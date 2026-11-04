@@ -22,7 +22,7 @@ from torch import nn
 from src.core.types import ExperimentSpec
 from src.datasets.adapter import file_digest
 
-ADAPTER_VERSION = "openclip-offline-v2-stable-preprocess"
+ADAPTER_VERSION = "openclip-offline-v3-openai-quickgelu"
 SUPPORTED_MODELS = ("ViT-B-32", "ViT-B-16", "ViT-L-14")
 
 
@@ -192,7 +192,7 @@ class OpenClipAdapter:
             raise RuntimeError("CUDA was requested but is unavailable; explicitly select runtime.device=cpu if intended")
         import open_clip
         model, _, preprocess = open_clip.create_model_and_transforms(
-            spec.model, pretrained=None,
+            spec.model, pretrained=None, force_quick_gelu=True,
         )
         names = tuple(parameter_names)
         # Match the serialized ImageEncoder layout, including legacy unused text
@@ -209,6 +209,7 @@ class OpenClipAdapter:
                 raise ValueError(f"{task_id}: head feature dimension {head.weight.shape[1]} != encoder {feature_dim}")
         self.identity = {
             "adapter": ADAPTER_VERSION, "architecture": spec.model,
+            "activation": "quick_gelu",
             "implementation_sha256": file_digest(Path(__file__)),
             "pretrained_family": spec.pretrained_tag,
             "preprocess": preprocessing_identity(preprocess),

@@ -48,20 +48,19 @@ class RealCheckpointTests(unittest.TestCase):
             self.assertTrue(torch.equal(actual[name], base[name] + expected[name]), name)
 
     def test_supplied_mnist_head_and_preprocessing_match_legacy_path(self):
-        import open_clip
         from src.models.adapter import OpenClipAdapter
         from src.models.modeling import ImageEncoder, ImageClassifier, ClassificationHead
+        from src.utils.variables_and_paths import OPENCLIP_CACHEDIR
         head_path = self.root / "head_MNISTVal.pt"
         if not head_path.is_file():
             self.skipTest("Local supplied MNIST head is required")
+        openai_path = Path(os.environ.get("TSV_OPENAI_CHECKPOINT", str(Path(OPENCLIP_CACHEDIR) / "ViT-B-32.pt")))
+        if not openai_path.is_file():
+            self.skipTest("Cached original OpenAI checkpoint is required; never download in tests")
         weights = torch.load(self.base_path, map_location="cpu")
-        factory = open_clip.create_model_and_transforms
-
-        def offline(*args, **kwargs):
-            kwargs["pretrained"] = None
-            return factory(*args, **kwargs)
-
-        with patch("open_clip.create_model_and_transforms", side_effect=offline):
+        # Exercise the actual OpenAI constructor, not pretrained=None (which
+        # changes QuickGELU into GELU). Resolve only its download to local bytes.
+        with patch("open_clip.openai.download_pretrained_from_url", return_value=str(openai_path)):
             legacy_encoder = ImageEncoder("ViT-B-32")
         legacy_encoder.load_state_dict(weights)
         legacy = ImageClassifier(legacy_encoder, ClassificationHead.load(str(head_path))).eval()
