@@ -9,6 +9,121 @@ from typing import Any, Iterable, Mapping
 from src.experiments.storage import identity_hash
 
 
+METHOD_LABELS = {
+    "zeroshot": "Zero-shot", "weight_average": "Weight Averaging",
+    "task_arithmetic": "Task Arithmetic", "ties": "TIES-Merging",
+    "consensus_ta": "Consensus TA", "tsvm": "TSV-M", "iso_cts": "Iso-CTS",
+    "dc_merge": "DC-Merge", "gse_tsv": "GSE-TSV", "sera": "SERA",
+}
+
+
+def method_id(record: Mapping[str, Any]) -> str:
+    method = record["method"]
+    return method["id"] if isinstance(method, Mapping) else method
+
+
+def select_methods(results: list[Mapping[str, Any]], methods: list[str]) -> list[Mapping[str, Any]]:
+    """Select explicitly named methods, preserving their requested order."""
+    if not methods or len(set(methods)) != len(methods):
+        raise ValueError("methods must be a nonempty list without duplicates")
+    missing = set(methods) - {method_id(record) for record in results}
+    if missing:
+        raise ValueError(f"Requested methods not found: {sorted(missing)}")
+    return [record for name in methods for record in results if method_id(record) == name]
+
+
+def comparison_labels(results) -> list[str]:
+    """Readable labels; unfamiliar method IDs need no plotting registration."""
+    from collections import Counter
+    ids = [method_id(record) for record in results]
+    repeated = Counter(ids)
+    labels = []
+    for record, name in zip(results, ids):
+        label = METHOD_LABELS.get(name, name)
+        if repeated[name] > 1:
+            method = record["method"]
+            version = method.get("implementation", "unknown") if isinstance(method, Mapping) else "unknown"
+            label += f" [{version}] {json.dumps(record.get('selected_params', {}), sort_keys=True)}"
+        labels.append(label)
+    counts, seen = Counter(labels), Counter()
+    for index, label in enumerate(labels):
+        if counts[label] > 1:
+            seen[label] += 1
+            labels[index] = f"{label} #{seen[label]}"
+    return labels
+
+
+def group_comparisons(results, table):
+    if len(results) != len(table):
+        raise ValueError("Comparison rows must correspond one-to-one with results")
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for record, row in zip(results, table):
+        groups[row["comparison_group"]].append((record, row))
+    return dict(groups)
+
+
+def task_order(results) -> tuple[str, ...]:
+    """Use the declared benchmark order, independently of JSON key order."""
+    first = results[0]
+    tasks = tuple(task["id"] for task in first["config"].get("tasks", ()))
+    if not tasks:
+        tasks = tuple(first["test"].get("per_task", {}))
+    if any(set(record["test"].get("per_task", {})) != set(tasks) for record in results):
+        raise ValueError("Per-task metrics differ from the declared task set")
+    return tasks
+
+
+def make_task_tables(results, table):
+    """Build percentage tables; saved macro means are never recomputed from rounded cells."""
+    tables = []
+    for group, pairs in group_comparisons(results, table).items():
+        records = [record for record, _ in pairs]
+        tasks = task_order(records)
+        if not tasks:
+            continue
+        labels = comparison_labels(records)
+        for metric, average in (("top1", "avg_top1"), ("normalized_top1", "avg_normalized_top1")):
+            if any(record["test"].get(average) is None or
+                   any(record["test"]["per_task"][task].get(metric) is None for task in tasks)
+                   for record in records):
+                continue
+            rows = []
+            for record, label in zip(records, labels):
+                values = {task: 100 * record["test"]["per_task"][task][metric] for task in tasks}
+                rows.append({"Method": label, **values, "Mean": 100 * record["test"][average]})
+            tables.append({"group": group, "metric": metric, "model": pairs[0][1]["model"],
+                           "benchmark": pairs[0][1]["benchmark"], "rows": rows})
+    return tables
+
+
+def export_task_tables(tables, output_dir):
+    """Save readable CSV and Markdown alongside the full-precision comparison CSV."""
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=False)
+    paths = []
+    for table in tables:
+        suffix = "accuracy" if table["metric"] == "top1" else "normalized_accuracy"
+        stem = f"{table['group'][:12]}_{suffix}_percent"
+        rows = [{key: value if key == "Method" else f"{value:.2f}" for key, value in row.items()}
+                for row in table["rows"]]
+        paths.append(export_csv(rows, output / f"{stem}.csv"))
+        title = "Test Accuracy (%)" if table["metric"] == "top1" else "Test Normalized Accuracy (%)"
+        columns = list(rows[0])
+        lines = [f"# {title}", "", f"{table['model']} / {table['benchmark']}", "",
+                 "| " + " | ".join(columns) + " |",
+                 "| " + " | ".join("---" if key == "Method" else "---:" for key in columns) + " |"]
+        for row in rows:
+            lines.append("| " + " | ".join(str(row[key]).replace("|", "\\|") for key in columns) + " |")
+        lines += ["", "Mean is the unweighted average across tasks, computed before rounding.",
+                  "Values are percentages rounded to two decimal places.", ""]
+        path = output / f"{stem}.md"
+        with path.open("x", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+        paths.append(path)
+    return paths
+
+
 def load_results(paths: Iterable[str | Path]) -> list[dict[str, Any]]:
     results = []
     for source in paths:
