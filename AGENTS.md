@@ -96,6 +96,10 @@ commit.
 
 * Inspect the current Git status before editing.
 * Make the smallest change required for the requested task.
+* Use the same experiment ID for `scripts/run_<experiment_id>.sh`,
+  `results/experiments/<experiment_id>/`, and
+  `results/reports/<experiment_id>/`. Keep method subsets under that
+  experiment's report directory, and document the correspondence in README.md.
 * Do not create additional documentation frameworks, manifests, ADR
   systems, run registries, or bootstrap generators unless explicitly
   requested.
