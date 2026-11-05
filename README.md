@@ -279,6 +279,22 @@ micromamba run -n tsv python scripts/collect_five_method_merge_diagnostics.py \
 
 このスクリプトも再マージしません。取得していないSTI等は未取得として扱います。診断は `runtime.trace=none`・`summary`・`full` で指定します。fullで追加分析をする手法と、ランク等の記録のみの手法があります。取得内容は保存されたtraceが根拠です。GPUの最大使用量は分母準備の後から最終保存の前までを計測し、常駐モデルと診断の使用量を含みます。RAMの値はLinuxプロセス全期間の最大RSSです。
 
+### TSV-MとGSE-TSVのランク配分・精度の分析
+
+同じ実験名の保存済み結果から、各層・各タスクのランク、エネルギー、90%エネルギー到達ランク、保持率と精度差を集計します。新しいマージ・学習・推論は行いません。
+
+```bash
+micromamba run -n tsv python scripts/analyze_fft8_b32_common_tuned_v1.py
+```
+
+入力は `results/experiments/fft8_b32_common_tuned_v1/*/result.json`、出力は `results/reports/fft8_b32_common_tuned_v1/tsvm_gse_rank_accuracy/` です。`--runs <TSV-Mのrun> <GSE-TSVのrun>` で対象を明示できます。同じ手法の実行が複数あれば自動選択せずに拒否します。既存出力は上書きせず、再生成には `--output <新しい保存先>` を使います。
+
+`layer_task_metrics.csv`、`layer_summary.csv`、`task_summary.csv` に全記録行列の値と集計を出します。主な図と相関は画像側50行列を対象にし、未使用のゼロ差分テキスト行列2個も含む52行列の集計は `scope=all_recorded_matrices` として区別します。ゼロエネルギーのr90・保持率、分母が0の増減率は空欄です。
+
+全層の保持エネルギー率は「保持エネルギーの合計÷総エネルギーの合計」を主指標にし、層別比率の単純平均も別の列へ出します。`correlations.csv` はタスクを1標本としたPearson・Spearman相関、`layer_correlations.csv` は各行列におけるタスク間相関です。層数を標本数に数えた相関は計算しません。
+
+`figures/` にタスク別のランクと精度差、ランク増減率のヒートマップ、散布図をPNG・SVGで保存します。代表スペクトルは精度差を見て選ばず、既定でブロック0・5・11のAttention QKV行列を使い、その曲線データを `spectral_curves.csv` に出します。`analysis.md` に定義・入力の識別情報・結果と解釈の限界を記録します。
+
 ## 5．中断した実験を再開する
 
 ```bash
